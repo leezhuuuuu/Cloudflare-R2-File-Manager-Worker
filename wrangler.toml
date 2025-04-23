@@ -4,7 +4,7 @@ compatibility_date = "2024-01-01" # 使用一个较新的兼容性日期
 
 # 绑定 R2 存储桶
 [[r2_buckets]]
-binding = 'MY_BUCKET' # 在 Worker 代码中将使用 env.MY_BUCKET 访问
+binding = 'MY_BUCKET' # 在 Worker 代码中将使用 env.MY_BUCKET 访问，在 Worker 代码中使用的环境变量名，请保持为 'MY_BUCKET'
 bucket_name = 'r2-test' # 您的 R2 存储桶的实际名称
 
 # 定义 Secret，用于存储密码
