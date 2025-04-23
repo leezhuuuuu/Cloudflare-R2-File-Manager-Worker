@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - CloudDrop</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f3f4f6; }
+        .login-card { background-color: white; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); width: 100%; max-width: 24rem; }
+        .error-message { color: #ef4444; font-size: 0.875rem; margin-top: 0.5rem; min-height: 1.25rem; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">CloudDrop 登录</h1>
+        <form id="login-form">
+            <div class="mb-4">
+                <label for="password" class="block text-sm font-medium text-gray-700 mb-1">访问密码</label>
+                <input type="password" id="password" name="password" required
+                       class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+            </div>
+            <button type="submit" id="login-button"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition duration-150 ease-in-out disabled:opacity-50">
+                登录
+            </button>
+            <p id="error-message" class="error-message text-center"></p>
+        </form>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('login-form');
+        const passwordInput = document.getElementById('password');
+        const loginButton = document.getElementById('login-button');
+        const errorMessage = document.getElementById('error-message');
+
+        // Clear any previous auth key on login page load
+        localStorage.removeItem('cloudDropAuthKey');
+
+        loginForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const password = passwordInput.value;
+            if (!password) {
+                errorMessage.textContent = '请输入密码。';
+                return;
+            }
+
+            errorMessage.textContent = ''; // Clear previous error
+            loginButton.disabled = true;
+            loginButton.textContent = '登录中...';
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: password }),
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        // Login successful: Store password and redirect to main app
+                        localStorage.setItem('cloudDropAuthKey', password);
+                        window.location.href = '/app'; // Redirect to the main app page
+                    } else {
+                         // Should not happen if response.ok is true, but handle defensively
+                         errorMessage.textContent = data.error || '登录失败，请重试。';
+                         loginButton.disabled = false;
+                         loginButton.textContent = '登录';
+                    }
+                } else {
+                    // Login failed (e.g., 401 Unauthorized)
+                    const errorData = await response.json().catch(() => ({ error: '密码错误或服务器问题。' }));
+                    errorMessage.textContent = errorData.error || '密码错误或服务器问题。';
+                    passwordInput.value = ''; // Clear password field
+                    loginButton.disabled = false;
+                    loginButton.textContent = '登录';
+                }
+            } catch (error) {
+                console.error('Login request failed:', error);
+                errorMessage.textContent = '登录请求失败，请检查网络连接。';
+                loginButton.disabled = false;
+                loginButton.textContent = '登录';
+            }
+        });
+    </script>
+</body>
+</html>

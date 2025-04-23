@@ -1,151 +1,4 @@
-/**
- * @typedef {object} Env
- * @property {R2Bucket} MY_BUCKET - The R2 bucket binding.
- * @property {string} AUTH_KEY_SECRET - The secret key for authentication.
- */
-
-/**
- * Simple authorization function using a pre-shared key in a custom header.
- * @param {Request} request - The incoming request.
- * @param {Env} env - The Worker environment.
- * @returns {boolean} - True if the request is authorized, false otherwise.
- */
-const isAuthenticated = (request, env) => {
-  const receivedAuthKey = request.headers.get("X-Custom-Auth-Key");
-  if (!env.AUTH_KEY_SECRET) {
-      console.error("AUTH_KEY_SECRET is not set in Worker environment!");
-      return false; // Cannot authenticate without a secret
-  }
-  // Basic check, consider more robust methods (e.g., hashing) in production
-  return receivedAuthKey === env.AUTH_KEY_SECRET;
-};
-
-export default {
-  /**
-   * The fetch handler for the Worker.
-   * Assumes static HTML (login.html, index.html) is served by Cloudflare Pages/Sites from './public'.
-   * This worker focuses on API routes and direct R2 object access.
-   * @param {Request} request - The incoming request.
-   * @param {Env} env - The Worker environment.
-   * @param {ExecutionContext} ctx - The execution context.
-   * @returns {Promise<Response>} - The response to the request.
-   */
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    // Remove leading and trailing slashes, handle empty path for root
-    const key = url.pathname.replace(/^\/|\/$/g, "");
-
-    // Serve login page for root path GET requests
-    if (key === "" && request.method === "GET") {
-        // Note: In a real Pages setup, Pages would handle serving this.
-        // This is a fallback if only the Worker is deployed or Pages isn't configured.
-        // Ideally, fetch the content from R2 or include it directly if small.
-        // For simplicity here, we'll return a placeholder or redirect.
-        // Let's return the actual login HTML content.
-        const LOGIN_HTML = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 - CloudDrop</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #f3f4f6; }
-        .login-card { background-color: white; padding: 2rem; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); width: 100%; max-width: 24rem; }
-        .error-message { color: #ef4444; font-size: 0.875rem; margin-top: 0.5rem; min-height: 1.25rem; }
-    </style>
-</head>
-<body>
-    <div class="login-card">
-        <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">CloudDrop 登录</h1>
-        <form id="login-form">
-            <div class="mb-4">
-                <label for="password" class="block text-sm font-medium text-gray-700 mb-1">访问密码</label>
-                <input type="password" id="password" name="password" required
-                       class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
-            </div>
-            <button type="submit" id="login-button"
-                    class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition duration-150 ease-in-out disabled:opacity-50">
-                登录
-            </button>
-            <p id="error-message" class="error-message text-center"></p>
-        </form>
-    </div>
-
-    <script>
-        const loginForm = document.getElementById('login-form');
-        const passwordInput = document.getElementById('password');
-        const loginButton = document.getElementById('login-button');
-        const errorMessage = document.getElementById('error-message');
-
-        // Clear any previous auth key on login page load
-        localStorage.removeItem('cloudDropAuthKey');
-
-        loginForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const password = passwordInput.value;
-            if (!password) {
-                errorMessage.textContent = '请输入密码。';
-                return;
-            }
-
-            errorMessage.textContent = ''; // Clear previous error
-            loginButton.disabled = true;
-            loginButton.textContent = '登录中...';
-
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ password: password }),
-                });
-
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.success) {
-                        // Login successful: Store password and redirect to main app
-                        localStorage.setItem('cloudDropAuthKey', password);
-                        window.location.href = '/app'; // Redirect to the main app page
-                    } else {
-                         // Should not happen if response.ok is true, but handle defensively
-                         errorMessage.textContent = data.error || '登录失败，请重试。';
-                         loginButton.disabled = false;
-                         loginButton.textContent = '登录';
-                    }
-                } else {
-                    // Login failed (e.g., 401 Unauthorized)
-                    const errorData = await response.json().catch(() => ({ error: '密码错误或服务器问题。' }));
-                    errorMessage.textContent = errorData.error || '密码错误或服务器问题。';
-                    passwordInput.value = ''; // Clear password field
-                    loginButton.disabled = false;
-                    loginButton.textContent = '登录';
-                }
-            } catch (error) {
-                console.error('Login request failed:', error);
-                errorMessage.textContent = '登录请求失败，请检查网络连接。';
-                loginButton.disabled = false;
-                loginButton.textContent = '登录';
-            }
-        });
-    </script>
-</body>
-</html>`;
-        return new Response(LOGIN_HTML, {
-             headers: { "Content-Type": "text/html;charset=UTF-8" }
-        });
-    }
-
-    // Serve main application page (index.html) for /app path GET requests
-    if (key === "app" && request.method === "GET") {
-        // This requires authentication check *before* serving the app page
-        if (!isAuthenticated(request, env)) {
-            // If not authenticated, redirect back to the login page (root)
-            return Response.redirect(url.origin + '/', 302);
-        }
-        // Return the actual index.html content
-        const INDEX_HTML = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -509,7 +362,7 @@ export default {
             });
 
             function updateThemeIcon(theme) {
-                themeIcon.className = \`fas \${theme === 'dark' ? 'fa-moon' : 'fa-sun'}\`;
+                themeIcon.className = `fas ${theme === 'dark' ? 'fa-moon' : 'fa-sun'}`;
             }
 
             // --- Date Management Functionality ---
@@ -517,7 +370,7 @@ export default {
             const year = today.getFullYear();
             const month = String(today.getMonth() + 1).padStart(2, '0');
             const day = String(today.getDate()).padStart(2, '0');
-            currentDate = \`\${year}-\${month}-\${day}\`;
+            currentDate = `${year}-${month}-${day}`;
             dateSelector.value = currentDate;
 
             if (!dataByDate[currentDate]) {
@@ -559,7 +412,7 @@ export default {
                         let errorMsg = '认证失败: 请重新登录。';
                         try {
                             const errorJson = JSON.parse(errorText);
-                            if (errorJson.error) errorMsg = \`认证失败: \${errorJson.error}\`;
+                            if (errorJson.error) errorMsg = `认证失败: ${errorJson.error}`;
                         } catch(e) { /* Ignore if not JSON */ }
                         showToast(errorMsg, 'error');
                         localStorage.removeItem('cloudDropAuthKey');
@@ -571,11 +424,11 @@ export default {
                     if (!response.ok) {
                         const errorText = await response.text();
                         console.error('API Request Failed:', response.status, errorText);
-                        let errorMsg = \`API 请求失败: \${response.statusText}\`;
+                        let errorMsg = `API 请求失败: ${response.statusText}`;
                         try {
                             const errorJson = JSON.parse(errorText);
-                            if (errorJson.error) errorMsg = \`API 请求失败: \${errorJson.error}\`;
-                            if (errorJson.details) errorMsg += \` (\${errorJson.details})\`;
+                            if (errorJson.error) errorMsg = `API 请求失败: ${errorJson.error}`;
+                            if (errorJson.details) errorMsg += ` (${errorJson.details})`;
                         } catch(e) { /* Ignore if not JSON */ }
                         showToast(errorMsg, 'error');
                         return null;
@@ -622,13 +475,13 @@ export default {
                 newFiles.forEach(file => {
                     let reason = null;
                     const fileType = file.type || '';
-                    if (file.size > MAX_FILE_SIZE) reason = \`文件太大 (\${formatFileSize(file.size)})\`;
-                    else if (!ALLOWED_TYPES.includes(fileType) && fileType && !fileType.startsWith('image/')) reason = \`不支持的文件类型 (\${fileType || '未知'})\`;
+                    if (file.size > MAX_FILE_SIZE) reason = `文件太大 (${formatFileSize(file.size)})`;
+                    else if (!ALLOWED_TYPES.includes(fileType) && fileType && !fileType.startsWith('image/')) reason = `不支持的文件类型 (${fileType || '未知'})`;
 
-                    if (reason) showToast(\`拒绝 "\${file.name}": \${reason}\`, 'error');
+                    if (reason) showToast(`拒绝 "${file.name}": ${reason}`, 'error');
                     else {
                         const exists = dataByDate[currentDate].files.some(f => f.name === file.name && f.size === file.size);
-                        if (exists) showToast(\`文件 "\${file.name}" 已在待上传列表中\`, 'info');
+                        if (exists) showToast(`文件 "${file.name}" 已在待上传列表中`, 'info');
                         else validFiles.push(file);
                     }
                 });
@@ -661,19 +514,19 @@ export default {
 
                     let statusHTML = '';
                     if (file.status === 'completed') statusHTML = '<span class="text-green-600 dark:text-green-400"><i class="fas fa-check-circle mr-1"></i> 已完成</span>';
-                    else if (file.status === 'error') statusHTML = \`<span class="text-red-600 dark:text-red-400"><i class="fas fa-exclamation-circle mr-1"></i> 失败\${file.error ? ': ' + file.error : ''}</span>\`;
-                    else if (file.progress > 0) statusHTML = file.speed ? \`\${file.speed} MB/s\` : '上传中...';
+                    else if (file.status === 'error') statusHTML = `<span class="text-red-600 dark:text-red-400"><i class="fas fa-exclamation-circle mr-1"></i> 失败${file.error ? ': ' + file.error : ''}</span>`;
+                    else if (file.progress > 0) statusHTML = file.speed ? `${file.speed} MB/s` : '上传中...';
                     else statusHTML = '待上传';
 
-                    fileItem.innerHTML = \`
+                    fileItem.innerHTML = `
                         <div class="flex items-center justify-between mb-2 flex-wrap">
                             <div class="flex items-center min-w-0 flex-1">
                                 <div class="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mr-3 flex-shrink-0">
-                                    <i class="\${iconClass}"></i>
+                                    <i class="${iconClass}"></i>
                                 </div>
                                 <div class="min-w-0">
-                                    <div class="font-medium text-gray-800 dark:text-gray-200 truncate max-w-xs sm:max-w-sm" title="\${file.name}">\${file.name}</div>
-                                    <div class="text-sm text-gray-500 dark:text-gray-400">\${formatFileSize(file.size)}</div>
+                                    <div class="font-medium text-gray-800 dark:text-gray-200 truncate max-w-xs sm:max-w-sm" title="${file.name}">${file.name}</div>
+                                    <div class="text-sm text-gray-500 dark:text-gray-400">${formatFileSize(file.size)}</div>
                                 </div>
                             </div>
                             <div class="flex items-center flex-shrink-0 ml-2">
@@ -683,10 +536,10 @@ export default {
                             </div>
                         </div>
                         <div class="w-full bg-gray-200 dark:bg-dark-500 rounded-full h-1.5 overflow-hidden mt-1">
-                            <div class="progress-bar rounded-full \${file.progress >= 90 ? 'progress-green' : ''}" style="width: \${file.progress || 0}%;"></div>
+                            <div class="progress-bar rounded-full ${file.progress >= 90 ? 'progress-green' : ''}" style="width: ${file.progress || 0}%;"></div>
                         </div>
-                        <div class="upload-speed mt-1 text-right text-xs" data-file-index="\${index}">\${statusHTML}</div>
-                    \`;
+                        <div class="upload-speed mt-1 text-right text-xs" data-file-index="${index}">${statusHTML}</div>
+                    `;
 
                     fileItem.querySelector('.remove-file-btn').addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -760,7 +613,7 @@ export default {
                              // Extract error message from rejected promise or failed response
                              const errorMessage = result.reason?.response?.data?.error || result.reason?.message || result.value?.error || '上传失败';
                              dataByDate[currentDate].files[finalIndex].error = errorMessage;
-                             console.error(\`Upload failed for \${originalFile.name}:\`, result.reason || result.value);
+                             console.error(`Upload failed for ${originalFile.name}:`, result.reason || result.value);
                          }
                      }
                 });
@@ -768,10 +621,10 @@ export default {
                 updateFileList();
 
                 if (successfulUploads > 0) {
-                    showToast(\`\${successfulUploads} 个文件已成功上传！\`, 'success');
+                    showToast(`${successfulUploads} 个文件已成功上传！`, 'success');
                 }
                 if (failedUploads > 0) {
-                    showToast(\`\${failedUploads} 个文件上传失败。\`, 'error', 8000);
+                    showToast(`${failedUploads} 个文件上传失败。`, 'error', 8000);
                 }
 
                 // Clear successfully uploaded files from the staging list
@@ -796,8 +649,8 @@ export default {
                     dataByDate[currentDate].files[index].speed = 0;
                     updateFileList(); // Show 'uploading' state
 
-                    const progressBar = fileList.querySelector(\`.file-item[data-file-index="\${index}"] .progress-bar\`);
-                    const statusElement = fileList.querySelector(\`.upload-speed[data-file-index="\${index}"]\`);
+                    const progressBar = fileList.querySelector(`.file-item[data-file-index="${index}"] .progress-bar`);
+                    const statusElement = fileList.querySelector(`.upload-speed[data-file-index="${index}"]`);
                     let lastLoaded = 0;
                     let startTime = performance.now();
 
@@ -825,21 +678,21 @@ export default {
 
                             // Update UI elements directly
                             if (progressBar) {
-                                progressBar.style.width = \`\${progress}%\`;
+                                progressBar.style.width = `${progress}%`;
                                 progressBar.classList.toggle('progress-green', progress >= 90);
                             }
                             if (statusElement) {
-                                statusElement.textContent = progress < 100 ? \`\${speed.toFixed(2)} MB/s\` : '处理中...';
+                                statusElement.textContent = progress < 100 ? `${speed.toFixed(2)} MB/s` : '处理中...';
                             }
                         }
                     })
                     .then(response => {
                         // Axios considers 2xx successful
-                        console.log(\`Upload successful for \${file.name}:\`, response.data);
+                        console.log(`Upload successful for ${file.name}:`, response.data);
                         resolve(response.data); // Resolve with { success: true, fileName: ... }
                     })
                     .catch(error => {
-                        console.error(\`Upload failed for \${file.name}:\`, error.response?.data || error.message);
+                        console.error(`Upload failed for ${file.name}:`, error.response?.data || error.message);
                         // Reject with the error object so allSettled can capture it
                         reject(error);
                     });
@@ -850,12 +703,12 @@ export default {
             // --- Toast Notification System ---
             function showToast(message, type = 'info', duration = 5000) {
                 const toast = document.createElement('div');
-                toast.className = \`toast px-6 py-3 rounded-lg shadow-lg flex items-center text-white text-sm \${
+                toast.className = `toast px-6 py-3 rounded-lg shadow-lg flex items-center text-white text-sm ${
                     type === 'error' ? 'bg-red-500' :
                     type === 'success' ? 'bg-green-500' : 'bg-blue-500'
-                }\`;
+                }`;
                 const icon = type === 'error' ? 'fa-exclamation-circle' : type === 'success' ? 'fa-check-circle' : 'fa-info-circle';
-                toast.innerHTML = \`<i class="fas \${icon} mr-2"></i><span>\${message}</span>\`;
+                toast.innerHTML = `<i class="fas ${icon} mr-2"></i><span>${message}</span>`;
                 toastContainer.appendChild(toast);
                 setTimeout(() => toast.classList.add('show'), 10);
                 setTimeout(() => {
@@ -879,12 +732,12 @@ export default {
                     const newListener = function() {
                         const currentCount = parseInt(countSpan.textContent);
                         const isLiked = icon.classList.contains('fas');
-                        icon.className = \`mr-2 \${isLiked ? 'far' : 'fas'} fa-thumbs-up\`;
+                        icon.className = `mr-2 ${isLiked ? 'far' : 'fas'} fa-thumbs-up`;
                         countSpan.textContent = isLiked ? currentCount - 1 : currentCount + 1;
                         button.classList.toggle('text-blue-600', !isLiked);
                         button.classList.toggle('dark:text-blue-400', !isLiked);
                     };
-                     const listenerName = \`likeListener_\${Date.now()}_\${Math.random().toString(36).substring(7)}\`;
+                     const listenerName = `likeListener_${Date.now()}_${Math.random().toString(36).substring(7)}`;
                      window[listenerName] = newListener;
                      button.dataset.listener = listenerName;
                      button.addEventListener('click', newListener);
@@ -916,28 +769,28 @@ export default {
                      const commentElement = document.createElement('div');
                      commentElement.className = 'comment mb-6 group';
                      commentElement.setAttribute('data-comment-id', comment.id);
-                     commentElement.innerHTML = \`
+                     commentElement.innerHTML = `
                          <div class="flex items-start">
-                             <img src="https://i.pravatar.cc/40?u=\${comment.author.replace(/\\s+/g, '.')}-\${comment.id}" alt="用户头像" class="w-10 h-10 rounded-full mr-3 object-cover">
+                             <img src="https://i.pravatar.cc/40?u=${comment.author.replace(/\s+/g, '.')}-${comment.id}" alt="用户头像" class="w-10 h-10 rounded-full mr-3 object-cover">
                              <div class="flex-1">
                                  <div class="flex items-center justify-between mb-1">
                                      <div>
-                                         <span class="font-medium text-gray-800 dark:text-gray-200">\${comment.author}</span>
-                                         <span class="text-sm text-gray-500 dark:text-gray-400 ml-2">\${comment.time}</span>
+                                         <span class="font-medium text-gray-800 dark:text-gray-200">${comment.author}</span>
+                                         <span class="text-sm text-gray-500 dark:text-gray-400 ml-2">${comment.time}</span>
                                      </div>
                                      <div class="comment-actions flex items-center space-x-3 text-sm">
                                          <button class="text-gray-500 hover:text-red-600 dark:hover:text-red-400" aria-label="举报"><i class="fas fa-flag"></i></button>
                                      </div>
                                  </div>
-                                 <p class="text-gray-700 dark:text-gray-300 break-words">\${comment.text}</p>
+                                 <p class="text-gray-700 dark:text-gray-300 break-words">${comment.text}</p>
                                  <div class="flex items-center mt-2 space-x-4 text-sm text-gray-500 dark:text-gray-400">
                                      <button class="like-button flex items-center hover:text-blue-600 dark:hover:text-blue-400 transition">
-                                         <i class="far fa-thumbs-up mr-2"></i> <span>\${comment.likes}</span>
+                                         <i class="far fa-thumbs-up mr-2"></i> <span>${comment.likes}</span>
                                      </button>
                                  </div>
                              </div>
                          </div>
-                     \`;
+                     `;
                      commentsList.appendChild(commentElement);
                  });
                  commentCountElement.textContent = comments.length;
@@ -953,7 +806,7 @@ export default {
                 console.log("Rendering timeline view via API...");
                 mainContentArea.classList.add('hidden');
                 timelineViewArea.classList.remove('hidden');
-                timelineContent.innerHTML = \`<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-2xl text-blue-500"></i><p class="text-gray-500 dark:text-gray-400 mt-2">加载时间线数据中...</p></div>\`;
+                timelineContent.innerHTML = `<div class="text-center py-8"><i class="fas fa-spinner fa-spin text-2xl text-blue-500"></i><p class="text-gray-500 dark:text-gray-400 mt-2">加载时间线数据中...</p></div>`;
 
                 try {
                     const response = await makeAuthenticatedRequest('/api/timeline');
@@ -967,7 +820,7 @@ export default {
                     const datesWithData = Object.keys(timelineData).sort().reverse();
 
                     if (datesWithData.length === 0) {
-                        timelineContent.innerHTML = \`<div class="text-center py-8"><i class="fas fa-box-open text-4xl text-gray-300 dark:text-dark-500 mb-4"></i><p class="text-gray-500 dark:text-gray-400">时间线中没有文件。</p></div>\`;
+                        timelineContent.innerHTML = `<div class="text-center py-8"><i class="fas fa-box-open text-4xl text-gray-300 dark:text-dark-500 mb-4"></i><p class="text-gray-500 dark:text-gray-400">时间线中没有文件。</p></div>`;
                         return;
                     }
 
@@ -985,7 +838,7 @@ export default {
                             const fileItem = document.createElement('div');
                             fileItem.className = 'timeline-file-item group relative bg-gray-100 dark:bg-dark-600 rounded-lg shadow-sm'; // Added group relative
                             fileItem.setAttribute('data-key', file.key);
-                            fileItem.setAttribute('title', \`名称: \${file.key.split('/').pop()}\\n大小: \${formatFileSize(file.size)}\\n上传于: \${new Date(file.uploaded).toLocaleString()}\`);
+                            fileItem.setAttribute('title', `名称: ${file.key.split('/').pop()}\n大小: ${formatFileSize(file.size)}\n上传于: ${new Date(file.uploaded).toLocaleString()}`);
                             fileItem.addEventListener('click', () => handleDownload({ currentTarget: fileItem }));
 
                             const deleteBtn = document.createElement('button');
@@ -1001,15 +854,15 @@ export default {
                             const fileType = file.contentType || '';
                             let filePreviewHTML = '';
                             if (fileType.startsWith('image/')) {
-                                const imageUrl = \`/\${file.key}\`;
-                                filePreviewHTML = \`<img src="\${imageUrl}" alt="\${file.key.split('/').pop()}" class="timeline-file-thumbnail" loading="lazy" onerror="this.onerror=null; this.src='https://placehold.co/100x100/e0e0e0/000000?text=Error'; this.style.objectFit='contain';">\`;
+                                const imageUrl = `/${file.key}`;
+                                filePreviewHTML = `<img src="${imageUrl}" alt="${file.key.split('/').pop()}" class="timeline-file-thumbnail" loading="lazy" onerror="this.onerror=null; this.src='https://placehold.co/100x100/e0e0e0/000000?text=Error'; this.style.objectFit='contain';">`;
                             } else {
                                 let iconClass = 'fas fa-file text-gray-500 dark:text-gray-400';
                                 if (fileType.includes('pdf')) iconClass = 'fas fa-file-pdf text-red-500 dark:text-red-400';
                                 else if (fileType.includes('word') || fileType.includes('document')) iconClass = 'fas fa-file-word text-blue-600 dark:text-blue-400';
                                 else if (fileType.includes('zip') || fileType.includes('compressed') || fileType.includes('archive')) iconClass = 'fas fa-file-archive text-yellow-500 dark:text-yellow-400';
                                 else if (fileType.includes('text')) iconClass = 'fas fa-file-alt text-gray-500 dark:text-gray-400';
-                                filePreviewHTML = \`<div class="timeline-file-icon"><i class="\${iconClass}"></i></div>\`;
+                                filePreviewHTML = `<div class="timeline-file-icon"><i class="${iconClass}"></i></div>`;
                             }
                             // Use innerHTML carefully, maybe append elements instead
                             const previewContainer = document.createElement('div');
@@ -1030,7 +883,7 @@ export default {
                     console.log("Timeline rendering complete via API.");
                 } catch (error) {
                     console.error("Error fetching or rendering timeline:", error);
-                    timelineContent.innerHTML = \`<p class="text-red-500 dark:text-red-400 text-center">加载时间线时出错: \${error.message}</p>\`;
+                    timelineContent.innerHTML = `<p class="text-red-500 dark:text-red-400 text-center">加载时间线时出错: ${error.message}</p>`;
                 }
             }
 
@@ -1045,8 +898,8 @@ export default {
                 if (!key) {
                     showToast("无法下载：文件标识丢失。", "error"); return;
                 }
-                console.log(\`Attempting to download: \${key}\`);
-                showToast(\`开始下载 \${key.split('/').pop()}...\`, 'info', 2000);
+                console.log(`Attempting to download: ${key}`);
+                showToast(`开始下载 ${key.split('/').pop()}...`, 'info', 2000);
                 const response = await makeAuthenticatedRequest('/' + key, { method: 'GET' });
                 if (!response) return;
                 try {
@@ -1061,7 +914,7 @@ export default {
                     window.URL.revokeObjectURL(url);
                 } catch (error) {
                     console.error("Error creating download link:", error);
-                    showToast(\`创建下载链接时出错: \${error.message}\`, 'error');
+                    showToast(`创建下载链接时出错: ${error.message}`, 'error');
                 }
             }
 
@@ -1070,21 +923,21 @@ export default {
                  if (!key) {
                      showToast("无法删除：文件标识丢失。", "error"); return;
                  }
-                 if (confirm(\`确定要永久删除文件 "\${key.split('/').pop()}" 吗？\`)) {
-                     console.log(\`Attempting to delete: \${key}\`);
-                     showToast(\`正在删除 \${key.split('/').pop()}...\`, 'info', 2000);
+                 if (confirm(`确定要永久删除文件 "${key.split('/').pop()}" 吗？`)) {
+                     console.log(`Attempting to delete: ${key}`);
+                     showToast(`正在删除 ${key.split('/').pop()}...`, 'info', 2000);
                      const response = await makeAuthenticatedRequest('/' + key, { method: 'DELETE' });
                      if (response) {
                           try {
                               const result = await response.json();
                               if (result.success) {
-                                   showToast(\`文件 "\${key.split('/').pop()}" 删除成功！\`, 'success');
+                                   showToast(`文件 "${key.split('/').pop()}" 删除成功！`, 'success');
                                    renderTimelineView(); // Refresh timeline
                               } else {
-                                   showToast(\`删除文件 "\${key.split('/').pop()}" 失败: \${result.error || '未知错误'}\`, 'error');
+                                   showToast(`删除文件 "${key.split('/').pop()}" 失败: ${result.error || '未知错误'}`, 'error');
                               }
                           } catch (e) {
-                               showToast(\`删除文件 "\${key.split('/').pop()}" 时响应解析失败\`, 'error');
+                               showToast(`删除文件 "${key.split('/').pop()}" 时响应解析失败`, 'error');
                           }
                      }
                  }
@@ -1100,213 +953,4 @@ export default {
         });
     </script>
 </body>
-</html>`;
-        return new Response(INDEX_HTML, {
-             headers: { "Content-Type": "text/html;charset=UTF-8" }
-         });
-    }
-
-
-    // Helper to create JSON responses with CORS headers for API routes
-    const jsonResponse = (data, options = {}) => {
-        const headers = new Headers(options.headers);
-        headers.set("Content-Type", "application/json");
-        // Allow requests from the origin where the HTML is served
-        // Best practice: Replace '*' with your actual domain in production
-        headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("Access-Control-Allow-Headers", "Content-Type, X-Custom-Auth-Key");
-        headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        return new Response(JSON.stringify(data), { ...options, headers });
-    };
-
-     // Handle CORS preflight requests for all API routes and file operations
-     if (request.method === "OPTIONS") {
-        // Respond to OPTIONS requests allowing necessary headers and methods
-        return new Response(null, {
-            headers: {
-                "Access-Control-Allow-Origin": "*", // Be more specific in production
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS", // Include PUT if needed later
-                "Access-Control-Allow-Headers": "Content-Type, X-Custom-Auth-Key", // Ensure auth header is allowed
-                "Access-Control-Max-Age": "86400", // Cache preflight response for 1 day
-            },
-        });
-    }
-
-
-    // --- API Routes ---
-
-    // Handle Login API (No auth required for this specific endpoint)
-    if (key === "api/login" && request.method === "POST") {
-        try {
-            const { password } = await request.json();
-            if (!env.AUTH_KEY_SECRET) {
-                 console.error("AUTH_KEY_SECRET is not set!");
-                 return jsonResponse({ success: false, error: "服务器配置错误" }, { status: 500 });
-            }
-            if (password === env.AUTH_KEY_SECRET) {
-                console.log("Login successful via API");
-                return jsonResponse({ success: true });
-            } else {
-                console.warn("Login failed: Incorrect password via API");
-                return jsonResponse({ success: false, error: "密码错误" }, { status: 401 });
-            }
-        } catch (error) {
-             console.error("Login API error:", error);
-             // Avoid exposing internal details in the error message
-             return jsonResponse({ success: false, error: "登录请求处理失败" }, { status: 400 });
-        }
-    }
-
-    // Handle file upload API (Requires Authentication)
-    if (key === "api/upload" && request.method === "POST") {
-      if (!isAuthenticated(request, env)) {
-        console.warn("Unauthorized API upload attempt");
-        return jsonResponse({ error: "认证失败" }, { status: 401 });
-      }
-
-      try {
-         const formData = await request.formData();
-         const file = formData.get("file");
-         // Optionally get date if sent from frontend: const date = formData.get("date") || new Date().toISOString().split('T')[0];
-         const datePrefix = new Date().toISOString().split('T')[0]; // Use current date for prefix
-
-         if (!file || !(file instanceof File)) {
-             console.error("API Upload: File not found in FormData");
-             return jsonResponse({ error: "未找到文件或无效的文件数据" }, { status: 400 });
-         }
-         // Construct a unique key, e.g., using date and timestamp/randomness
-         const uniqueFileName = `${datePrefix}/${Date.now()}-${file.name}`;
-
-         console.log(`API Upload: Uploading file: ${uniqueFileName}, Type: ${file.type || 'N/A'}, Size: ${file.size}`);
-
-         const uploadedObject = await env.MY_BUCKET.put(uniqueFileName, file.stream(), {
-             httpMetadata: { contentType: file.type || "application/octet-stream" },
-             // customMetadata: { uploadedBy: 'user-id' }, // Example custom metadata
-         });
-
-         console.log(`API Upload: Success: ${uploadedObject.key}`);
-         // Return the generated key so the frontend knows the final path if needed
-         return jsonResponse({ success: true, fileName: uploadedObject.key });
-
-      } catch (error) {
-        console.error("API Upload error:", error);
-        return jsonResponse({ error: "上传失败", details: error.message || String(error) }, { status: 500 });
-      }
-    }
-
-    // Handle timeline data API (Requires Authentication)
-    if (key === "api/timeline" && request.method === "GET") {
-      if (!isAuthenticated(request, env)) {
-        console.warn("Unauthorized API timeline attempt");
-        return jsonResponse({ error: "认证失败" }, { status: 401 });
-      }
-      try {
-        console.log("API Timeline: Fetching object list...");
-        // Consider using options like prefix or delimiter for larger buckets
-        const listed = await env.MY_BUCKET.list();
-        console.log(`API Timeline: Found ${listed.objects.length} objects.`);
-        const timelineData = {};
-        // Group objects by date prefix (YYYY-MM-DD) if present, otherwise by upload date
-        for (const obj of listed.objects) {
-            const keyParts = obj.key.split('/');
-            // Check if the first part looks like a date YYYY-MM-DD
-            const dateKey = keyParts.length > 1 && /^\d{4}-\d{2}-\d{2}$/.test(keyParts[0])
-                               ? keyParts[0]
-                               : obj.uploaded.toISOString().split('T')[0]; // Fallback to upload date
-
-            if (!timelineData[dateKey]) timelineData[dateKey] = [];
-            timelineData[dateKey].push({
-                key: obj.key,
-                size: obj.size,
-                uploaded: obj.uploaded.toISOString(),
-                contentType: obj.httpMetadata?.contentType || "application/octet-stream"
-            });
-        }
-        // Sort files within each date group by upload time (newest first)
-        for (const date in timelineData) {
-            timelineData[date].sort((a, b) => new Date(b.uploaded) - new Date(a.uploaded));
-        }
-        console.log("API Timeline: Data grouped and sorted.");
-        return jsonResponse(timelineData);
-      } catch (error) {
-        console.error("API Timeline fetch error:", error);
-        return jsonResponse({ error: "获取时间线数据失败", details: error.message || String(error) }, { status: 500 });
-      }
-    }
-
-
-    // --- Direct R2 Object Access (Requires Authentication) ---
-    // This handles GET requests for specific file keys (e.g., /2023-10-27/1698391...)
-    // It excludes known paths like '', 'app', 'api/*'
-    const isFileAccess = key !== "" && key !== "app" && !key.startsWith("api/");
-
-    if (isFileAccess) {
-        // ALL direct file access (GET/DELETE) requires authentication first
-        if (!isAuthenticated(request, env)) {
-            console.warn(`Unauthorized direct access attempt: ${request.method} /${key}`);
-            // For API-like access (likely from JS), return 401/403
-            // If a user tries to directly access a file URL, redirecting might be better UX,
-            // but since our app fetches via JS, 401 is appropriate.
-             return new Response("Unauthorized: Authentication required.", {
-                 status: 401,
-                 headers: { "Content-Type": "text/plain" }
-             });
-        }
-
-        // Handle Authenticated GET (Download)
-        if (request.method === "GET") {
-            try {
-                console.log(`Authenticated GET: Fetching object: ${key}`);
-                const object = await env.MY_BUCKET.get(key);
-
-                if (object === null) {
-                    console.warn(`Authenticated GET: Object not found: ${key}`);
-                    return new Response("Object Not Found", { status: 404 });
-                }
-                console.log(`Authenticated GET: Found object: ${key}, Size: ${object.size}`);
-
-                const headers = new Headers();
-                object.writeHttpMetadata(headers); // Copies metadata like Content-Type
-                headers.set("etag", object.httpEtag); // Set ETag for caching
-                // Consider adding Content-Disposition for download prompting
-                // headers.set('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
-
-                return new Response(object.body, { headers });
-            } catch (error) {
-                console.error(`Authenticated GET: Error getting object ${key}:`, error);
-                return new Response(`Error getting object: ${error.message}`, { status: 500 });
-            }
-        }
-
-        // Handle Authenticated DELETE
-        if (request.method === "DELETE") {
-            try {
-                console.log(`Authenticated DELETE: Deleting object: ${key}`);
-                await env.MY_BUCKET.delete(key);
-                console.log(`Authenticated DELETE: Success: ${key}`);
-                // Return JSON confirmation for frontend handling
-                return jsonResponse({ success: true, message: `Deleted ${key}` });
-            } catch (error) {
-                console.error(`Authenticated DELETE: Error deleting object ${key}:`, error);
-                return jsonResponse({ error: "删除失败", details: error.message || String(error) }, { status: 500 });
-            }
-        }
-
-         // Reject other methods (PUT, POST) on direct file paths unless specifically handled
-         console.warn(`Authenticated Access: Method ${request.method} not allowed for key: ${key}`);
-         return new Response("Method Not Allowed for this resource", {
-             status: 405,
-             headers: { Allow: "GET, DELETE" } // Only allow GET and DELETE on existing keys
-         });
-    }
-
-
-    // --- Fallback ---
-    // If the request didn't match any API route or authenticated file access pattern,
-    // and assuming static assets are handled by Pages/Sites, this likely means a 404.
-    // Log the unhandled request for debugging.
-    console.log(`Unhandled request: ${request.method} ${request.url}`);
-    // Return a generic 404
-    return new Response("Not Found", { status: 404 });
-  },
-};
+</html>
