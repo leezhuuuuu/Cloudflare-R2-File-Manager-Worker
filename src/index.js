@@ -139,11 +139,10 @@ export default {
 
     // Serve main application page (index.html) for /app path GET requests
     if (key === "app" && request.method === "GET") {
-        // This requires authentication check *before* serving the app page
-        if (!isAuthenticated(request, env)) {
-            // If not authenticated, redirect back to the login page (root)
-            return Response.redirect(url.origin + '/', 302);
-        }
+        console.log("Accessing /app route. Serving index.html without worker-side auth check (frontend handles auth).");
+        // Frontend (index.html) is responsible for checking localStorage and redirecting if needed.
+        // Worker simply serves the main application page here.
+
         // Return the actual index.html content
         const INDEX_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
